@@ -1,5 +1,5 @@
 {
   "installCommand": "echo \"skip install\"",
   "buildCommand": "pip install --break-system-packages -r requirements.txt && python -m mkdocs build",
-  "outputDirectory": "JDDOCS"
+  "outputDirectory": "site"
 }
