@@ -35,51 +35,51 @@ Descrever de forma clara e rastreável a arquitetura, responsabilidades e fluxos
 
 ```mermaid
 flowchart TD
-    A[Cliente / Sistema Origem] --> B[API Inclusão de Título]
+    A[Cliente Externo / Sistema Consumidor] --> B[API de Entrada]
 
-    B --> C{Chave de Idempotência<br/>existe no Redis?}
+    B --> C{Chave de Idempotência<br/>existe no Cache?}
 
-    C -->|Sim| D[Retorna<br/>Chave_idempotência existente]
+    C -->|Sim| D[Retorna resposta<br/>idempotente]
 
-    C -->|Não| E[Publica mensagem<br/>no RabbitMQ]
-    E --> F[Grava chave<br/>no Redis]
+    C -->|Não| E[Publica mensagem<br/>na Fila Principal]
+    E --> F[Registra chave<br/>no Cache]
 
-    E --> G[jdsfn-persister-worker-deploy]
-    G --> H[(TbJdNpcDst_Titulo)]
+    E --> G[Worker de Persistência Inicial]
+    G --> H[(Tabela_Entidade_Principal)]
 
-    H --> I[jdsfn-router-worker-deploy]
-    I --> J[jd.npc.dst.titulo.inclui.command.queue]
+    H --> I[Worker de Roteamento]
+    I --> J[fila.entidade.criar.command]
 
-    J --> K[jdsfn-send-worker-deploy]
-    K --> L[MQ - Nuclea]
-    K --> M[jd.npc.dst.titulo.dda0101.send-result.event.queue]
+    J --> K[Worker de Envio Externo]
+    K --> L[Sistema Externo]
+    K --> M[fila.envio.resultado.evento]
 
-    M --> N[jdsfn-persister-worker-deploy]
-    N --> O[(TbJdSfn_MsgTransmitida)]
-    N --> P[(TbJdNpcDst_TituloTrnsmtd)]
+    M --> N[Worker de Persistência de Envio]
+    N --> O[(Tabela_Mensagens_Enviadas)]
+    N --> P[(Tabela_Entidade_Transmitida)]
 
-    L --> Q[Nuclea]
-    Q -->|DDA0101R1| R[Sucesso]
-    Q -->|DDA0101E| S[Erro]
+    L --> Q[Processador Externo]
+    Q -->|Resposta_OK| R[Processamento com Sucesso]
+    Q -->|Resposta_ERRO| S[Processamento com Erro]
 
-    R --> T[jdsfn-receive-worker-deploy]
+    R --> T[Worker de Recebimento]
     S --> T
 
-    T --> U[jd.sfn.receive.router.msg.queue]
+    T --> U[fila.retorno.roteamento]
 
-    U --> V[jdsfn-router-worker-deploy]
-    V --> W[jd.npc.dst.titulo.dda0101r1.event.queue]
-    V --> X[jd.npc.dst.titulo.dda0101e.event.queue]
-    V --> Y[jd.sfn.receive.persister.queue]
+    U --> V[Worker de Roteamento de Retorno]
+    V --> W[fila.entidade.sucesso.evento]
+    V --> X[fila.entidade.erro.evento]
+    V --> Y[fila.retorno.persistencia]
 
-    Y --> Z[jdsfn-persister-worker-deploy]
-    Z --> AA[(TbJdSfn_MsgRecebida)]
+    Y --> Z[Worker de Persistência Final]
+    Z --> AA[(Tabela_Mensagens_Recebidas)]
 
-    W --> AB[jdnpc-destinataria-titulo-worker-deploy]
+    W --> AB[Worker de Atualização de Status]
     X --> AB
 
-    AB --> AC[(TbJdNpcDst_TituloAct)]
-    AB --> AD[(TbJdNpcDst_TituloRjtd)]
+    AB --> AC[(Tabela_Entidade_Ativa)]
+    AB --> AD[(Tabela_Entidade_Rejeitada)]
 ```
 
 ---
@@ -88,38 +88,38 @@ flowchart TD
 
 - **Endpoint**
 ```http
-POST destinataria-titulo-api/jdnpc/destinatario/api/v1/titulo
+POST api-entidade/v1/entidades
 ```
 
 - Serviço responsável:
-  - `jdnpc-destinataria-titulo-api-deploy`
+  - `api-entidade-gateway`
 
 ---
 
-## 2️⃣ Verificação de Idempotência (Redis)
+## 2️⃣ Verificação de Idempotência (Cache)
 
-- Consulta ao Redis para validação da **Chave de Idempotência**
+- Consulta ao **Cache Distribuído** para validação da **Chave de Idempotência**
 - Serviço:
-  - `jdnpc-destinataria-titulo-api-deploy`
+  - `api-entidade-gateway`
 
 ### Decisão
-- ✅ Chave existente → retorna resposta anterior  
-- ❌ Chave inexistente → continua o processamento
+- ✅ Chave existente → retorna resposta previamente processada  
+- ❌ Chave inexistente → continua o fluxo de processamento
 
 ---
 
 ## 3️⃣ Processamento Inicial
 
 ### 📤 Publicação
-- Envia mensagem para o **RabbitMQ**
-- Grava chave no Redis
+- Publica mensagem na **Fila de Entrada**
+- Registra a chave de idempotência no **Cache Distribuído**
 
 ### 💾 Persistência Inicial
 - Serviço:
-  - `jdsfn-persister-worker-deploy`
+  - `worker-persistencia-inicial`
 - Tabela:
 ```sql
-TbJdNpcDst_Titulo
+TBL_ENTIDADE_BASE
 ```
 
 ---
@@ -128,57 +128,57 @@ TbJdNpcDst_Titulo
 
 ### 🔀 Roteamento
 - Serviço:
-  - `jdsfn-router-worker-deploy`
+  - `worker-roteamento-comando`
 - Fila:
 ```text
-jd.npc.dst.titulo.inclui.command.queue
+fila.entidade.criar.command
 ```
 
-### 📡 Envio para MQ
+### 📡 Envio para Sistema Externo
 - Serviço:
-  - `jdsfn-send-worker-deploy`
+  - `worker-envio-externo`
 - Fila:
 ```text
-jd.npc.dst.titulo.dda0101.send-result.event.queue
+fila.entidade.envio.resultado.event
 ```
 
-### 🗃️ Persistência
+### 🗃️ Persistência de Envio
 - Serviço:
-  - `jdsfn-persister-worker-deploy`
+  - `worker-persistencia-envio`
 - Tabelas:
 ```sql
-TbJdSfn_MsgTransmitida
-TbJdNpcDst_TituloTrnsmtd
+TBL_MENSAGENS_ENVIADAS
+TBL_ENTIDADE_ENVIADA
 ```
 
 ---
 
-## 5️⃣ Processamento pela Nuclea
+## 5️⃣ Processamento pelo Sistema Externo
 
 | Código | Resultado |
 |------|----------|
-| DDA0101R1 | Sucesso |
-| DDA0101E | Erro |
+| RESP_OK | Processamento realizado com sucesso |
+| RESP_ERRO | Falha no processamento |
 
 ---
 
 ## 6️⃣ Recebimento da Resposta
 
 - Serviço:
-  - `jdsfn-receive-worker-deploy`
+  - `worker-recebimento-retorno`
 - Fila:
 ```text
-jd.sfn.receive.router.msg.queue
+fila.retorno.roteamento
 ```
 
 ### Roteamento do Retorno
 - Serviço:
-  - `jdsfn-router-worker-deploy`
+  - `worker-roteamento-retorno`
 - Filas:
 ```text
-jd.npc.dst.titulo.dda0101r1.event.queue
-jd.npc.dst.titulo.dda0101e.event.queue
-jd.sfn.receive.persister.queue
+fila.entidade.sucesso.event
+fila.entidade.erro.event
+fila.retorno.persistencia
 ```
 
 ---
@@ -187,24 +187,28 @@ jd.sfn.receive.persister.queue
 
 ### Mensagens Recebidas
 - Serviço:
-  - `jdsfn-persister-worker-deploy`
+  - `worker-persistencia-final`
 - Tabela:
 ```sql
-TbJdSfn_MsgRecebida
+TBL_MENSAGENS_RECEBIDAS
 ```
 
-### Status do Título
+### Status da Entidade
 
 | Situação | Tabela |
 |--------|--------|
-| Sucesso | TbJdNpcDst_TituloAct |
-| Erro | TbJdNpcDst_TituloRjtd |
+| Sucesso | TBL_ENTIDADE_ATIVA |
+| Erro | TBL_ENTIDADE_REJEITADA |
 
 ---
 
 ## ✅ Conclusão
 
-- Controle de idempotência via Redis  
-- Mensageria desacoplada  
-- Persistência em todas as etapas críticas  
-- Tratamento completo de sucesso e erro
+- Controle de idempotência via **Cache Distribuído**  
+- Arquitetura orientada a **mensageria assíncrona**  
+- Persistência aplicada em todos os pontos críticos  
+- Tratamento explícito de sucesso e erro  
+
+---
+
+> Documento genérico para uso público, estudos arquiteturais e portfólio técnico.
